@@ -1,0 +1,9 @@
+Drop test inputs here:
+  sample-audio.mp3
+  slide1.jpg
+  slide2.jpg
+  slide3.jpg   (optional)
+  qr.png       (optional — triggers the end-card render path)
+
+This directory is gitignored except for this placeholder so the
+folder structure is preserved on a fresh clone.

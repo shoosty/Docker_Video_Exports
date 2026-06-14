@@ -1,0 +1,11 @@
+.git/
+.gitignore
+.dockerignore
+test/
+README.md
+task.md
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store
