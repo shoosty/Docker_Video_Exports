@@ -370,6 +370,13 @@ def upload_to_supabase(local_path: Path, song_id: str) -> str:
         # don't bury the why behind a generic httpx exception.
         log(f"  response body (first 2000): {r.text[:2000]}", "ERROR")
         log(f"  response body (full): {r.text}", "ERROR")
+        # Embed the body in the exception so it lands in the
+        # RunPod job's error field — visible without digging into
+        # worker logs.
+        raise RuntimeError(
+            f"Supabase upload failed: HTTP {r.status_code} "
+            f"for {url}\nResponse body: {r.text}"
+        )
     r.raise_for_status()
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{storage_path}"
     log(f"✓ upload done → {public_url}")
