@@ -335,18 +335,34 @@ def render_video(input_data: dict, tmpdir: Path) -> tuple:
 # ─────────────────────────────────────────────
 
 def upload_to_supabase(local_path: Path, song_id: str) -> str:
+    """
+    Stephen 2026-06-15: bypass the supabase-py client entirely and
+    PUT to the Storage REST API with httpx. supabase-py 2.7.4 was
+    rejecting the service-role key with "Invalid API key" at
+    create_client time even when the key was clearly present in env
+    — likely a JWT-vs-new-key-format mismatch. The REST endpoint
+    accepts either format directly.
+    """
+    import httpx
     storage_path = f"{song_id}/song.mp4"
-    log(f"uploading to Supabase: bucket={SUPABASE_BUCKET}  path={storage_path}  size={local_path.stat().st_size:,}")
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{storage_path}"
+    log(f"uploading to Supabase via httpx: {url}  size={local_path.stat().st_size:,}")
     t0 = time.time()
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     with open(local_path, "rb") as f:
-        sb.storage.from_(SUPABASE_BUCKET).upload(
-            storage_path,
-            f,
-            {"content-type": "video/mp4", "upsert": "true"},
+        r = httpx.put(
+            url,
+            content=f,
+            headers={
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "video/mp4",
+                "x-upsert": "true",
+            },
+            timeout=300,
         )
-    public_url = sb.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
-    log(f"✓ upload done in {time.time()-t0:.1f}s → {public_url}")
+    log(f"  HTTP {r.status_code}  {time.time()-t0:.1f}s")
+    r.raise_for_status()
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{storage_path}"
+    log(f"✓ upload done → {public_url}")
     return public_url
 
 
