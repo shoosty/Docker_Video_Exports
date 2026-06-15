@@ -337,29 +337,38 @@ def render_video(input_data: dict, tmpdir: Path) -> tuple:
 def upload_to_supabase(local_path: Path, song_id: str) -> str:
     """
     Stephen 2026-06-15: bypass the supabase-py client entirely and
-    PUT to the Storage REST API with httpx. supabase-py 2.7.4 was
-    rejecting the service-role key with "Invalid API key" at
-    create_client time even when the key was clearly present in env
-    — likely a JWT-vs-new-key-format mismatch. The REST endpoint
-    accepts either format directly.
+    PUT to the Storage REST API with httpx.
+
+    Upload-body shape matters: passing `content=open(file)` made
+    httpx stream the body with chunked transfer encoding and no
+    Content-Length, and Supabase Storage rejects that with a 400.
+    Read the whole file into memory before sending so httpx sets
+    Content-Length and uses a single PUT. Files are 10-150MB, fine
+    in RAM on any RunPod worker.
     """
     import httpx
     storage_path = f"{song_id}/song.mp4"
     url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{storage_path}"
-    log(f"uploading to Supabase via httpx: {url}  size={local_path.stat().st_size:,}")
+    size = local_path.stat().st_size
+    log(f"uploading to Supabase via httpx: {url}  size={size:,}")
     t0 = time.time()
     with open(local_path, "rb") as f:
-        r = httpx.put(
-            url,
-            content=f,
-            headers={
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "video/mp4",
-                "x-upsert": "true",
-            },
-            timeout=300,
-        )
+        body = f.read()
+    r = httpx.put(
+        url,
+        content=body,
+        headers={
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "video/mp4",
+            "x-upsert": "true",
+        },
+        timeout=300,
+    )
     log(f"  HTTP {r.status_code}  {time.time()-t0:.1f}s")
+    if r.status_code >= 400:
+        # Surface the actual server message so future failures
+        # don't bury the why behind a generic httpx exception.
+        log(f"  response body: {r.text[:2000]}", "ERROR")
     r.raise_for_status()
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{storage_path}"
     log(f"✓ upload done → {public_url}")
