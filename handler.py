@@ -396,33 +396,84 @@ def upload_to_supabase(local_path: Path, song_id: str) -> str:
 # ─────────────────────────────────────────────
 
 def handler(job: dict) -> dict:
-    log(f"━━━ job received: id={job.get('id')} ━━━")
+    """
+    Top-level entry. Stephen 2026-06-15 — strong error logging
+    rule: every exception logs the full traceback + the inputs
+    we were holding, then re-raises with a structured error
+    message that includes step + traceback + input echo. RunPod
+    surfaces the exception's string in the job result, and the
+    worker's stdout/stderr lands in the Workers > Logs tab. We
+    want failures to be FAST to repair without a docker rebuild
+    cycle.
+    """
+    import traceback
+    job_id = job.get("id", "?")
+    job_t0 = time.time()
+    log(f"━━━ job received: id={job_id} ━━━")
     log(f"  raw input keys: {list(job.get('input', {}).keys())}")
 
-    input_data = job["input"]
-
-    if not input_data.get("audio_url"):
-        raise ValueError("Missing required field: audio_url")
-    if not input_data.get("slides"):
-        raise ValueError("Missing required field: slides (must be a non-empty list)")
-
+    input_data = job.get("input") or {}
     song_id = input_data.get("song_id", "untitled")
-    log(f"  song_id={song_id}  slides={len(input_data['slides'])}")
+    n_slides = len(input_data.get("slides") or [])
+    audio_url = input_data.get("audio_url")
+    log(f"  song_id={song_id}  slides={n_slides}  audio_url={audio_url}")
 
-    with tempfile.TemporaryDirectory() as td:
-        tmpdir = Path(td)
-        log(f"  working tmpdir: {tmpdir}")
-        video_path, audio_duration, render_time = render_video(input_data, tmpdir)
-        size_bytes = video_path.stat().st_size
-        video_url = upload_to_supabase(video_path, song_id)
+    # The current step name. Every raise updates this so the
+    # except block can name which stage broke.
+    step = "validation"
+    try:
+        if not audio_url:
+            raise ValueError("Missing required field: audio_url")
+        if n_slides == 0:
+            raise ValueError("Missing required field: slides (non-empty list)")
 
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            log(f"  working tmpdir: {tmpdir}")
+            step = "render"
+            video_path, audio_duration, render_time = render_video(input_data, tmpdir)
+            size_bytes = video_path.stat().st_size
+            step = "upload"
+            video_url = upload_to_supabase(video_path, song_id)
+    except Exception as exc:
+        elapsed = time.time() - job_t0
+        tb = traceback.format_exc()
+        # Log everything to worker stdout for the Workers tab.
+        log("━━━ ✗ JOB FAILED ━━━", "ERROR")
+        log(f"  job_id   = {job_id}", "ERROR")
+        log(f"  step     = {step}", "ERROR")
+        log(f"  song_id  = {song_id}", "ERROR")
+        log(f"  slides   = {n_slides}", "ERROR")
+        log(f"  audio    = {audio_url}", "ERROR")
+        log(f"  elapsed  = {elapsed:.1f}s", "ERROR")
+        log(f"  exc type = {type(exc).__name__}", "ERROR")
+        log(f"  exc msg  = {exc}", "ERROR")
+        log(f"  traceback:\n{tb}", "ERROR")
+        # Re-raise with a structured message so RunPod's job
+        # error field carries enough to debug without opening
+        # the Workers tab. Strip the original wrapping so a
+        # caller doesn't see "Exception('Exception(...)') ".
+        raise RuntimeError(
+            f"[step={step}] {type(exc).__name__}: {exc}\n\n"
+            f"Inputs: song_id={song_id} slides={n_slides} audio_url={audio_url}\n\n"
+            f"Traceback:\n{tb}"
+        ) from exc
+
+    total_elapsed = time.time() - job_t0
     result = {
         "video_url": video_url,
         "duration_sec": round(audio_duration, 3),
         "size_bytes": size_bytes,
         "render_time_sec": round(render_time, 2),
     }
-    log(f"━━━ job done: {result} ━━━")
+    log("━━━ ✓ JOB OK ━━━")
+    log(f"  job_id     = {job_id}")
+    log(f"  song_id    = {song_id}")
+    log(f"  audio_dur  = {audio_duration:.2f}s  ({n_slides} slides)")
+    log(f"  render     = {render_time:.1f}s  (handler internal)")
+    log(f"  total      = {total_elapsed:.1f}s  (download + render + upload)")
+    log(f"  size       = {size_bytes:,} bytes  ({size_bytes / 1024 / 1024:.1f} MB)")
+    log(f"  video_url  = {video_url}")
     return result
 
 
