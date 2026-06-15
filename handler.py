@@ -358,6 +358,14 @@ def upload_to_supabase(local_path: Path, song_id: str) -> str:
         url,
         content=body,
         headers={
+            # Stephen 2026-06-15: send BOTH apikey + Authorization.
+            # Supabase's new compact key format (sb_secret_...) is
+            # not a JWS, so the gotrue middleware rejects it with
+            # "Invalid Compact JWS" when only Authorization is set.
+            # supabase-py sends both headers automatically; doing
+            # the same here makes Storage accept either the legacy
+            # JWT (eyJhbGci...) or the new compact format.
+            "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "video/mp4",
             "x-upsert": "true",
